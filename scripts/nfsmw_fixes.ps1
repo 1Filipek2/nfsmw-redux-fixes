@@ -17,12 +17,15 @@ $patches = @(
     },
     @{
         File     = "NextGenGraphics.MostWanted.asi"
-        Info     = "worker thread sleeps 1 ms when idle"
+        Info     = "worker thread sleeps 1 ms when idle, material fixup every 8th frame"
         Original = "f9752191ba30e75e8ec489743f5a20a517b006e3f81e45efc5f0e29441d26cd0"
-        Patched  = "73eef80cb79cc3f8b58ad4babf65aec72ada80f7b3fd16fd36a5d1a540c81bcc"
+        Patched  = "403faf38ab2dbd3be3a66a622f399d147a9876daf292da140e7d914529f20e69"
+        Older    = @("73eef80cb79cc3f8b58ad4babf65aec72ada80f7b3fd16fd36a5d1a540c81bcc")
         Bytes    = @(
             @{ Offset = 0x7E043; Old = @(0xD2); New = @(0x0A) },
-            @{ Offset = 0x7E04E; Old = @(0x5E, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC); New = @(0x6A, 0x01, 0xE8, 0xEB, 0x88, 0x05, 0x00, 0xEB, 0xBF) }
+            @{ Offset = 0x7E04E; Old = @(0x5E, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC); New = @(0x6A, 0x01, 0xE8, 0xEB, 0x88, 0x05, 0x00, 0xEB, 0xBF) },
+            @{ Offset = 0x6FAB0; Old = @(0xCC) * 27; New = @(0xE8, 0x00, 0x00, 0x00, 0x00, 0x58, 0xFF, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0xF6, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0x07, 0x75, 0x05, 0xE9, 0xE6, 0xFE, 0xFF, 0xFF, 0xC3) },
+            @{ Offset = 0x6FAFE; Old = @(0xFE); New = @(0xFF) }
         )
     },
     @{
@@ -64,10 +67,12 @@ function Invoke-Patch {
     $hash = Get-Sha256 $data
 
     if ($hash -eq $Patch.Patched) { Write-Host "skip     $($Patch.File) (already patched)"; return $true }
-    if ($hash -ne $Patch.Original) { Write-Host "skip     $($Patch.File) (unknown version, not touched)"; return $true }
+    $older = $Patch.Older -contains $hash
+    if ($hash -ne $Patch.Original -and -not $older) { Write-Host "skip     $($Patch.File) (unknown version, not touched)"; return $true }
 
     foreach ($b in $Patch.Bytes) {
         for ($i = 0; $i -lt $b.Old.Count; $i++) {
+            if ($older -and $data[$b.Offset + $i] -eq $b.New[$i]) { continue }
             if ($data[$b.Offset + $i] -ne $b.Old[$i]) {
                 Write-Host "error    $($Patch.File): unexpected byte at offset 0x$('{0:X}' -f ($b.Offset + $i))"
                 return $false
@@ -80,9 +85,10 @@ function Invoke-Patch {
         return $false
     }
 
-    if (-not (Test-Path "$Path.orig")) { Copy-Item $Path "$Path.orig" }
+    if (-not $older -and -not (Test-Path "$Path.orig")) { Copy-Item $Path "$Path.orig" }
     [IO.File]::WriteAllBytes($Path, $data)
-    Write-Host "patched  $($Patch.File) ($($Patch.Info))"
+    $action = if ($older) { "updated " } else { "patched " }
+    Write-Host "$action $($Patch.File) ($($Patch.Info))"
     return $true
 }
 
