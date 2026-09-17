@@ -8,6 +8,7 @@ All addresses assume the default image base `0x10000000`. File offsets are raw o
 - Per thread CPU usage of the game process
 - Thread start addresses to find which module created each busy thread
 - Sampling the instruction pointer and stack of busy threads to find the exact loops
+- Windows Performance Recorder CPU traces for the main thread: where it runs and why it waits
 
 ## NFSMWGraphics.asi
 
@@ -25,7 +26,11 @@ All addresses assume the default image base `0x10000000`. File offsets are raw o
 ## NextGenGraphics.MostWanted.asi
 
 - SHA-256 original: `f9752191ba30e75e8ec489743f5a20a517b006e3f81e45efc5f0e29441d26cd0`
-- SHA-256 patched: `73eef80cb79cc3f8b58ad4babf65aec72ada80f7b3fd16fd36a5d1a540c81bcc`
+- SHA-256 patched: `403faf38ab2dbd3be3a66a622f399d147a9876daf292da140e7d914529f20e69`
+- SHA-256 patched by v1.0.0 (worker thread only): `73eef80cb79cc3f8b58ad4babf65aec72ada80f7b3fd16fd36a5d1a540c81bcc`, the patcher updates it
+
+### Worker thread
+
 - A worker thread runs an ASIO `io_context` in a loop starting at `0x1007EC10`
 - `run()` returns immediately when there is no pending work, the loop calls it again with no wait
 - Result: one core at 100% for the whole session
@@ -58,6 +63,43 @@ After:
 1007EC55  jmp  1007EC16            ; EB BF
 ```
 
+### Material walk
+
+- `0x100706E0` runs every frame and updates the NGG shader values
+- It first calls `0x100705B0`, which walks the game's model list (`0x91A0D0`), every mesh and every material entry (`0x68` bytes each)
+- For entries with effect id `[+0x30] == 0` it hashes `ANM_WATERA_` and `ANM_WATERA_001` with the game's string hash (`0x460BF0`), sets id 8 on a match and writes the effect pointer `[+0x34]` from the game's effect table (`0x93DE78`)
+- The game already writes `[+0x34]` from the same table when it loads the material chunk (`0x134B02`, loop at `0x6E3F90` in the exe), so for everything except new water materials the write changes nothing
+- Most of the cost is cache misses while walking the lists, around 8.5% of main thread samples at `0x100705F2`, `0x100705FA`, `0x10070607`
+- Patch: the call goes through a stub in the `int3` padding at `0x100706B0` that counts frames and calls the walk every 8th frame
+- The counter is at `0x1011AFFC`, unused space after the end of `.data` (virtual size `0x8DE0`) inside the same writable page
+- The module gets loaded at a different base in game, so the stub finds the counter relative to its own address with `call` / `pop eax`, no new relocations are needed
+- New water materials get their shader within 8 frames of loading
+
+Before:
+
+```
+100706B0  int3 padding
+100706FC  call 100705B0                  ; E8 AF FE FF FF
+```
+
+After:
+
+```
+100706B0  call 100706B5                  ; E8 00 00 00 00
+100706B5  pop  eax                       ; 58
+100706B6  inc  dword ptr [eax+0AA947h]   ; FF 80 47 A9 0A 00, 1011AFFC
+100706BC  test byte ptr [eax+0AA947h], 7 ; F6 80 47 A9 0A 00 07
+100706C3  jne  100706CA                  ; 75 05
+100706C5  jmp  100705B0                  ; E9 E6 FE FF FF
+100706CA  ret                            ; C3
+100706FC  call 100706B0                  ; E8 AF FF FF FF
+```
+
+| VA | File offset | Before | After |
+|---|---|---|---|
+| `0x100706B0` | `0x6FAB0` | 27 x `CC` | stub above |
+| `0x100706FE` | `0x6FAFE` | `FE` | `FF` |
+
 ## MW360Tweaks.asi
 
 - SHA-256 original: `7784a333b1e1e8765ce788ce1f97c5ccec7c4e602ac813485eb4f6d8b4cb5ca4`
@@ -78,6 +120,20 @@ After:
 | `0x1000166D` | `0xA6D` | `jne` (`75`) | `jmp` (`EB`) |
 
 ## Measurements
+
+### Same sprint race, 90 s per run, two runs per setup
+
+| Setup | Avg FPS | 99th percentile frame time | 1% low FPS | CPU busy per frame |
+|---|---|---|---|---|
+| Patches v1.0.0, `SimRate = 60` | 84.4 / 84.6 | 19.2 / 18.5 ms | 29.3 / 46.6 | 11.4 / 11.3 ms |
+| `SimRate = -1` (144 Hz) | 146.1 / 146.5 | 10.1 / 10.7 ms | 62.6 / 75.1 | 6.5 / 6.5 ms |
+| Same + material walk patch | 150.1 / 147.7 | 10.9 / 11.0 ms | 67.6 / 72.8 | 6.3 / 6.4 ms |
+
+- At `SimRate = 60` the main thread ran about 58% of the time, 29% of the trace was `Sleep` called from the simulation step wait at `0x642E60` in the exe
+- At `SimRate = -1` the main thread runs 92-95% of the time and FPS sits at the 144 Hz step, so CPU savings show up in CPU busy time more than in average FPS
+- WPR traces before and after the material walk patch: `NextGenGraphics.MostWanted.asi` went from 15.2% to 7.6% of main thread samples
+
+### Earlier runs
 
 Same laptop, 2 min PresentMon captures, different races so treat it as a rough comparison.
 
