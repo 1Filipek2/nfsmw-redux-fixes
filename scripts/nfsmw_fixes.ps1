@@ -49,7 +49,7 @@ function Get-Sha256 {
 
 function Find-GameDir {
     param([string]$Dir)
-    $candidates = @($Dir, (Get-Location).Path, (Split-Path $PSScriptRoot -Parent)) | Where-Object { $_ }
+    $candidates = if ($Dir) { @($Dir) } else { @((Get-Location).Path, (Split-Path $PSScriptRoot -Parent)) }
     foreach ($c in $candidates) {
         if (Test-Path (Join-Path $c "scripts\*.asi")) { return (Resolve-Path $c).Path }
     }
