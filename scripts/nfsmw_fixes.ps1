@@ -95,14 +95,37 @@ function Invoke-Patch {
 function Invoke-Restore {
     param($Patch, [string]$Path)
     $backup = "$Path.orig"
-    if (-not (Test-Path $backup)) { Write-Host "skip     $($Patch.File) (no backup)"; return $true }
-    if ((Get-Sha256 ([IO.File]::ReadAllBytes($backup))) -ne $Patch.Original) {
-        Write-Host "skip     $($Patch.File) (backup is not the original version)"
+    if (Test-Path $backup) {
+        if ((Get-Sha256 ([IO.File]::ReadAllBytes($backup))) -ne $Patch.Original) {
+            Write-Host "skip     $($Patch.File) (backup is not the original version)"
+            return $true
+        }
+        Copy-Item $backup $Path -Force
+        Remove-Item $backup
+        Write-Host "restored $($Patch.File)"
         return $true
     }
-    Copy-Item $backup $Path -Force
-    Remove-Item $backup
-    Write-Host "restored $($Patch.File)"
+
+    $data = [IO.File]::ReadAllBytes($Path)
+    $hash = Get-Sha256 $data
+    if ($hash -eq $Patch.Original) { Write-Host "skip     $($Patch.File) (not patched)"; return $true }
+    if ($hash -ne $Patch.Patched -and $Patch.Older -notcontains $hash) {
+        Write-Host "skip     $($Patch.File) (no backup, unknown version)"
+        return $true
+    }
+
+    foreach ($b in $Patch.Bytes) {
+        for ($i = 0; $i -lt $b.Old.Count; $i++) {
+            if ($data[$b.Offset + $i] -eq $b.New[$i]) { $data[$b.Offset + $i] = [byte]$b.Old[$i] }
+        }
+    }
+    if ((Get-Sha256 $data) -ne $Patch.Original) {
+        Write-Host "error    $($Patch.File): reverted file hash mismatch, nothing written"
+        return $false
+    }
+
+    [IO.File]::WriteAllBytes($Path, $data)
+    Write-Host "restored $($Patch.File) (no backup, patch bytes reverted)"
     return $true
 }
 
