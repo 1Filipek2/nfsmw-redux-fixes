@@ -1,6 +1,8 @@
 param(
     [string]$GameDir,
-    [switch]$Restore
+    [switch]$Restore,
+    [ValidateSet("hotkeys", "ngg-worker", "ngg-walk", "mw360-png")]
+    [string]$Only
 )
 
 # each patch only applies to the exact file version it was made for
@@ -11,8 +13,8 @@ $patches = @(
         Original = "9a62a02e2a5bd405549e6e12d737f8cea8982c94c3aa115a0bc862898a233619"
         Patched  = "9d0f21454d77f0f41998819f2e76e5f3bb8d815be58fd95c8c92319969e07928"
         Bytes    = @(
-            @{ Offset = 0x17C8; Old = @(0x00); New = @(0x0A) },
-            @{ Offset = 0x1816; Old = @(0x00); New = @(0x0A) }
+            @{ Id = "hotkeys"; Offset = 0x17C8; Old = @(0x00); New = @(0x0A) },
+            @{ Id = "hotkeys"; Offset = 0x1816; Old = @(0x00); New = @(0x0A) }
         )
     },
     @{
@@ -22,10 +24,10 @@ $patches = @(
         Patched  = "403faf38ab2dbd3be3a66a622f399d147a9876daf292da140e7d914529f20e69"
         Older    = @("73eef80cb79cc3f8b58ad4babf65aec72ada80f7b3fd16fd36a5d1a540c81bcc")
         Bytes    = @(
-            @{ Offset = 0x7E043; Old = @(0xD2); New = @(0x0A) },
-            @{ Offset = 0x7E04E; Old = @(0x5E, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC); New = @(0x6A, 0x01, 0xE8, 0xEB, 0x88, 0x05, 0x00, 0xEB, 0xBF) },
-            @{ Offset = 0x6FAB0; Old = @(0xCC) * 27; New = @(0xE8, 0x00, 0x00, 0x00, 0x00, 0x58, 0xFF, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0xF6, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0x07, 0x75, 0x05, 0xE9, 0xE6, 0xFE, 0xFF, 0xFF, 0xC3) },
-            @{ Offset = 0x6FAFE; Old = @(0xFE); New = @(0xFF) }
+            @{ Id = "ngg-worker"; Offset = 0x7E043; Old = @(0xD2); New = @(0x0A) },
+            @{ Id = "ngg-worker"; Offset = 0x7E04E; Old = @(0x5E, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC); New = @(0x6A, 0x01, 0xE8, 0xEB, 0x88, 0x05, 0x00, 0xEB, 0xBF) },
+            @{ Id = "ngg-walk"; Offset = 0x6FAB0; Old = @(0xCC) * 27; New = @(0xE8, 0x00, 0x00, 0x00, 0x00, 0x58, 0xFF, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0xF6, 0x80, 0x47, 0xA9, 0x0A, 0x00, 0x07, 0x75, 0x05, 0xE9, 0xE6, 0xFE, 0xFF, 0xFF, 0xC3) },
+            @{ Id = "ngg-walk"; Offset = 0x6FAFE; Old = @(0xFE); New = @(0xFF) }
         )
     },
     @{
@@ -34,10 +36,10 @@ $patches = @(
         Original = "7784a333b1e1e8765ce788ce1f97c5ccec7c4e602ac813485eb4f6d8b4cb5ca4"
         Patched  = "c15364f2c3c267b2fd33ab415207a9864669ec1cc6da3ab081eac6e1a9572c06"
         Bytes    = @(
-            @{ Offset = 0x9D5; Old = @(0x75); New = @(0xEB) },
-            @{ Offset = 0xA11; Old = @(0x75); New = @(0xEB) },
-            @{ Offset = 0xA3F; Old = @(0x75); New = @(0xEB) },
-            @{ Offset = 0xA6D; Old = @(0x75); New = @(0xEB) }
+            @{ Id = "mw360-png"; Offset = 0x9D5; Old = @(0x75); New = @(0xEB) },
+            @{ Id = "mw360-png"; Offset = 0xA11; Old = @(0x75); New = @(0xEB) },
+            @{ Id = "mw360-png"; Offset = 0xA3F; Old = @(0x75); New = @(0xEB) },
+            @{ Id = "mw360-png"; Offset = 0xA6D; Old = @(0x75); New = @(0xEB) }
         )
     }
 )
@@ -92,6 +94,39 @@ function Invoke-Patch {
     return $true
 }
 
+# for measuring one patch at a time, there is no known hash for a partly patched file
+function Invoke-PatchOnly {
+    param($Patch, [string]$Path, [string]$Id)
+    $data = [IO.File]::ReadAllBytes($Path)
+    $original = (Get-Sha256 $data) -eq $Patch.Original
+    $bytes = @($Patch.Bytes | Where-Object { $_.Id -eq $Id })
+
+    if (-not $bytes) {
+        $state = if ($original) { "original" } else { "not the original version" }
+        Write-Host "skip     $($Patch.File) (not selected, $state)"
+        return $true
+    }
+    if (-not $original) {
+        Write-Host "error    $($Patch.File): -Only needs the original version, run restore first"
+        return $false
+    }
+
+    foreach ($b in $bytes) {
+        for ($i = 0; $i -lt $b.Old.Count; $i++) {
+            if ($data[$b.Offset + $i] -ne $b.Old[$i]) {
+                Write-Host "error    $($Patch.File): unexpected byte at offset 0x$('{0:X}' -f ($b.Offset + $i))"
+                return $false
+            }
+            $data[$b.Offset + $i] = [byte]$b.New[$i]
+        }
+    }
+
+    if (-not (Test-Path "$Path.orig")) { Copy-Item $Path "$Path.orig" }
+    [IO.File]::WriteAllBytes($Path, $data)
+    Write-Host "patched  $($Patch.File) (only $Id)"
+    return $true
+}
+
 function Invoke-Restore {
     param($Patch, [string]$Path)
     $backup = "$Path.orig"
@@ -109,17 +144,19 @@ function Invoke-Restore {
     $data = [IO.File]::ReadAllBytes($Path)
     $hash = Get-Sha256 $data
     if ($hash -eq $Patch.Original) { Write-Host "skip     $($Patch.File) (not patched)"; return $true }
-    if ($hash -ne $Patch.Patched -and $Patch.Older -notcontains $hash) {
-        Write-Host "skip     $($Patch.File) (no backup, unknown version)"
-        return $true
-    }
+    $known = $hash -eq $Patch.Patched -or $Patch.Older -contains $hash
 
+    # an unknown hash can still be a file patched with -Only, the original hash check decides
     foreach ($b in $Patch.Bytes) {
         for ($i = 0; $i -lt $b.Old.Count; $i++) {
             if ($data[$b.Offset + $i] -eq $b.New[$i]) { $data[$b.Offset + $i] = [byte]$b.Old[$i] }
         }
     }
     if ((Get-Sha256 $data) -ne $Patch.Original) {
+        if (-not $known) {
+            Write-Host "skip     $($Patch.File) (no backup, unknown version)"
+            return $true
+        }
         Write-Host "error    $($Patch.File): reverted file hash mismatch, nothing written"
         return $false
     }
@@ -127,6 +164,11 @@ function Invoke-Restore {
     [IO.File]::WriteAllBytes($Path, $data)
     Write-Host "restored $($Patch.File) (no backup, patch bytes reverted)"
     return $true
+}
+
+if ($Only -and $Restore) {
+    Write-Host "-Only can't be combined with -Restore, restore always reverts the whole file"
+    exit 1
 }
 
 $game = Find-GameDir $GameDir
@@ -149,7 +191,7 @@ $failed = $false
 foreach ($p in $patches) {
     $path = Join-Path $game "scripts\$($p.File)"
     if (-not (Test-Path $path)) { Write-Host "skip     $($p.File) (not installed)"; continue }
-    $ok = if ($Restore) { Invoke-Restore $p $path } else { Invoke-Patch $p $path }
+    $ok = if ($Restore) { Invoke-Restore $p $path } elseif ($Only) { Invoke-PatchOnly $p $path $Only } else { Invoke-Patch $p $path }
     if (-not $ok) { $failed = $true }
 }
 
