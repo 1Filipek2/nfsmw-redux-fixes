@@ -121,6 +121,22 @@ After:
 
 ## Measurements
 
+### Benchmark scenario
+
+Everything from the ablation onwards uses this scenario. The two tables further down are older and were recorded before it.
+
+- Quick Race, sprint, Boundary & Marina, Porsche Cayman S, no tuning
+- The race takes 98 s at best and about 104 s when not pushed, so the capture window has to fit inside that
+- `bench/record.ps1 <name>` waits 10 s, then captures 75 s with PresentMon 2.5.1
+- `bench/stats.py` drops the first 5 s of every capture by time, so 70 s is analysed
+- 3 runs per configuration, the laptop on mains, no overlay or driver changes between runs
+- 1920x1080 at 144 Hz, `ResX` and `ResY` left at 0 so the game takes the desktop resolution
+- `Settings.ini`: `g_VSyncOn = 0`, `g_PerformanceLevel = 5`, `g_WorldLodLevel = 3`, `g_CarLodLevel = 1`, `g_ShadowDetail = 2`, `g_RoadReflectionEnable = 2`
+- The game runs on the discrete GPU, `HKCU\Software\Microsoft\DirectX\UserGpuPreferences` has `GpuPreference=2` for the exe
+- With every patch applied and `SimRate = -1` the frame rate sits near the 144 Hz the `SimRate` patch derives from the display, so the fastest configurations can run into that ceiling. Configurations S0 to S5 use `SimRate = 60` for that reason
+
+A check capture with every patch applied and `SimRate = -1` gave 141.8 avg FPS, 86.4 1% low, 10.4 ms 99th percentile, 6.6 ms median CPU busy, 4.5 ms median GPU busy and no frame over 33 ms. It used the older 25 s plus 90 s window and is a single run, so it is not an ablation result.
+
 ### Same sprint race, 90 s per run, two runs per setup
 
 | Setup | Avg FPS | 99th percentile frame time | 1% low FPS | CPU busy per frame |
